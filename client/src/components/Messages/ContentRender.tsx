@@ -1,6 +1,7 @@
 import { useRecoilValue } from 'recoil';
-import { useCallback, useMemo, memo } from 'react';
-import type { TMessage, TMessageContentParts } from 'librechat-data-provider';
+// Add useState to the react import
+import { useCallback, useMemo, memo, useState, useEffect } from 'react';
+import type { TMessage, TMessageContentParts, TSource } from 'librechat-data-provider';
 import type { TMessageProps, TMessageIcon } from '~/common';
 import ContentParts from '~/components/Chat/Messages/Content/ContentParts';
 import PlaceholderRow from '~/components/Chat/Messages/ui/PlaceholderRow';
@@ -22,6 +23,15 @@ type ContentRenderProps = {
   'currentEditId' | 'setCurrentEditId' | 'siblingIdx' | 'setSiblingIdx' | 'siblingCount'
 >;
 
+// Helper type for our citation data
+type Citation = {
+  text: string;
+  rerank_score?: number;
+  metadata?: {
+    source?: string;
+  };
+};
+
 const ContentRender = memo(
   ({
     message: msg,
@@ -34,6 +44,10 @@ const ContentRender = memo(
     setCurrentEditId,
     isSubmittingFamily = false,
   }: ContentRenderProps) => {
+    // --- START: NEW CITATION STATE ---
+    const [citations, setCitations] = useState<Citation[] | null>(null);
+    // --- END: NEW CITATION STATE ---
+
     const { attachments, searchResults } = useAttachments({
       messageId: msg?.messageId,
       attachments: msg?.attachments,
@@ -53,6 +67,8 @@ const ContentRender = memo(
       setLatestMessage,
       regenerateMessage,
       handleFeedback,
+      // We need the raw stream data to check for our custom metadata
+      stream,
     } = useMessageActions({
       message: msg,
       searchResults,
@@ -60,6 +76,22 @@ const ContentRender = memo(
       isMultiMessage,
       setCurrentEditId,
     });
+
+    // --- START: NEW CITATION EFFECT ---
+    // This effect runs whenever the stream data changes
+    useEffect(() => {
+      if (stream && stream.length > 0) {
+        // Look at the last chunk of the stream
+        const lastChunk = stream[stream.length - 1];
+        if (lastChunk.choices[0]?.delta?.custom_meta?.citations) {
+          const newCitations = lastChunk.choices[0].delta.custom_meta.citations;
+          logger.log('[Citations] Received citations:', newCitations);
+          setCitations(newCitations);
+        }
+      }
+    }, [stream]); // Dependency array ensures this runs when `stream` updates
+    // --- END: NEW CITATION EFFECT ---
+
     const maximizeChatSpace = useRecoilValue(store.maximizeChatSpace);
     const fontSize = useRecoilValue(store.fontSize);
 
@@ -177,6 +209,32 @@ const ContentRender = memo(
                 conversationId={conversation?.conversationId}
                 content={msg.content as Array<TMessageContentParts | undefined>}
               />
+              {/* --- START: NEW CITATION RENDER --- */}
+              {citations && citations.length > 0 && (
+                <div className="mt-4 w-full">
+                  <div className="text-sm font-semibold mb-2 text-gray-400">Sources</div>
+                  <div className="accordion-container">
+                    {citations.map((citation, index) => (
+                      <div key={index} className="accordion-item bg-gray-900/70 rounded-lg mb-2 border border-gray-700">
+                        <details>
+                          <summary className="p-2 cursor-pointer text-xs flex items-center">
+                            <span className="font-mono text-xs p-1 bg-gray-700 rounded mr-2">
+                              Score: {citation.rerank_score?.toFixed(4) ?? 'N/A'}
+                            </span>
+                            <span className="truncate">
+                              Source {index + 1}: {citation.metadata?.source?.split('/').pop() ?? 'Unknown Source'}
+                            </span>
+                          </summary>
+                          <div className="p-4 border-t border-gray-700">
+                            <p className="text-gray-300 text-sm whitespace-pre-wrap font-mono">{citation.text}</p>
+                          </div>
+                        </details>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+              {/* --- END: NEW CITATION RENDER --- */}
             </div>
 
             {(isSubmittingFamily || isSubmitting) && !(msg.children?.length ?? 0) ? (
